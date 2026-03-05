@@ -102,7 +102,7 @@ namespace xdp {
             << " Please check the number of columns used by the design." << std::endl;
         xrt_core::message::send(xrt_core::message::severity_level::debug, "XRT", numSegmentMsg.str());
   
-        for (auto i: nCol) {
+        for (uint32_t i = 0; i < nCol; i++) {
           activeUCs.emplace_back((uint8_t)i /*col*/, (uint8_t)0 /*index*/);
         }
       }
