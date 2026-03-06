@@ -186,6 +186,8 @@ namespace xdp {
         case xrt_core::smi::smi_hardware_config::hardware_type::krk1:
           boType = xrt_core::bo_int::use_type::debug;
           break;
+        default:
+          break;
       }
     } catch (const std::exception& e) {
       std::stringstream msg;
