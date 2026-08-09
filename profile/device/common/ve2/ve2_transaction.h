@@ -45,6 +45,10 @@ namespace xdp::aie {
       }
 
       // Below functions are required for AIE Trace only
+      bool prepareMetricsKernel(xrt::hw_context hwContext);
+      bool runMetricsKernel();
+      bool prepareOffloadKernel(xrt::hw_context hwContext);
+      bool runOffloadKernel();
       // AIE Trace requires a flush ELF to force trace packets out of the tiles at end-of-run.  
       //
       // During flush ELF, creation of xrt::kernel calls ip_context::open() which accesses a
@@ -60,6 +64,14 @@ namespace xdp::aie {
       std::vector<uint8_t> m_rows;
       std::vector<uint64_t> m_offsets;
       std::vector<uint32_t> m_values;
+
+      // AIE trace set metrics kernel, pre-created during setup
+      xrt::kernel m_metricsKernel;
+      bool m_metricsKernelReady = false;
+
+      // AIE trace offload kernel, pre-created during setup
+      xrt::kernel m_offloadKernel;
+      bool m_offloadKernelReady = false;
 
       // AIE trace flush kernel, pre-created during setup
       xrt::kernel m_flushKernel;

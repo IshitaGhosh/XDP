@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (C) 2022-2025 Advanced Micro Devices, Inc. All rights reserved
+// Copyright (C) 2022-2026 Advanced Micro Devices, Inc. All rights reserved
 
 #ifndef AIE_TRACE_DOT_H
 #define AIE_TRACE_DOT_H
@@ -43,6 +43,16 @@ namespace xdp {
     void freeResources() override;
     void* setAieDeviceInst(void* handle, uint64_t deviceID) override;
     uint64_t checkTraceBufSize(uint64_t size) override;
+  
+    // Run-lifecycle hooks: debug-only logging for now to verify the
+    // run_constructor/run_start/run_wait plumbing fires at runtime.
+    void onRunConstructor(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                          const std::string& kernel_name,
+                          void* elf_handle) override;
+    void onRunStart(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                   const std::string& kernel_name) override;
+    void onRunWait(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                  const std::string& kernel_name, int ert_cmd_state) override;
 
   private:
     // -------------------------------------------------------------------------

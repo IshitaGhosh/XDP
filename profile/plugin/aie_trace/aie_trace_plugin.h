@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2022-2024 Advanced Micro Devices, Inc. - All rights reserved
+ * Copyright (C) 2022-2026 Advanced Micro Devices, Inc. - All rights reserved
  *
  * Licensed under the Apache License, Version 2.0 (the "License"). You may
  * not use this file except in compliance with the License. A copy of the
@@ -45,6 +45,21 @@ public:
   virtual void writeAll(bool openNewFiles) override;
   void endPollforDevice(void *handle);
   static bool alive();
+
+protected:
+  // Overrides of the XDPPlugin run-lifecycle hook implementations.
+  // aie_trace_cb.cpp must NOT call these directly; it calls the
+  // public XDPPlugin::run*Hook wrappers, which filter out runs
+  // submitted by XDP plugins themselves before delegating here.
+  void runConstructorImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                          const std::string& kernel_name,
+                          void* elf_handle) override;
+  void runStartImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                    const std::string& kernel_name) override;
+  void runWaitImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                   const std::string& kernel_name,
+                   int ert_cmd_state) override;
+
 
 private:
   uint64_t getDeviceIDFromHandle(void *handle);

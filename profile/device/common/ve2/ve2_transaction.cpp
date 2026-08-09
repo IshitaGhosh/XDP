@@ -166,6 +166,107 @@ namespace xdp::aie {
     }
 
     // Below functions are required for AIE Trace only
+    bool VE2Transaction::prepareMetricsKernel(xrt::hw_context hwContext)
+    {
+        xrt_core::message::send(severity_level::info, "XRT",
+            "Preparing metric kernel from ELF: " + getElfFileName());
+        try {
+            xrt::elf metricsElf(getElfFileName());
+            xrt::module mod{metricsElf};
+            m_metricsKernel = xrt::ext::kernel{hwContext, mod, "XDP_KERNEL:{IPUV1CNN}"};
+            m_metricsKernelReady = true;
+            xrt_core::message::send(severity_level::info, "XRT",
+                "Metric kernel prepared successfully.");
+            return true;
+        } catch (const std::exception& e) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                std::string("Failed to prepare metric kernel: ") + e.what());
+            m_metricsKernelReady = false;
+            return false;
+        } catch (...) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                "Failed to prepare metric kernel (unknown error).");
+            m_metricsKernelReady = false;
+            return false;
+        }
+    }
+
+    bool VE2Transaction::runMetricsKernel()
+    {
+        if (!m_metricsKernelReady) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                "Metric kernel was not prepared. Cannot setup AIE trace.");
+            return false;
+        }
+        try {
+            xrt_core::message::send(severity_level::debug, "XRT", "Running pre-created metric kernel");
+            xrt::run run{m_metricsKernel};
+            run.start();
+            run.wait2();
+            xrt_core::message::send(severity_level::debug, "XRT", "Metric setup run done!");
+            return true;
+        } catch (const std::exception& e) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                std::string("Metric setup kernel run failed: ") + e.what());
+            return false;
+        } catch (...) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                "Metric setup kernel run failed (unknown error).");
+            return false;
+        }
+    }
+
+    bool VE2Transaction::prepareOffloadKernel(xrt::hw_context hwContext)
+    {
+        xrt_core::message::send(severity_level::info, "XRT",
+            "Preparing Offload kernel from ELF: " + getElfFileName());
+        try {
+            xrt::elf offloadElf(getElfFileName());
+            xrt::module mod{offloadElf};
+            m_offloadKernel = xrt::ext::kernel{hwContext, mod, "XDP_KERNEL:{IPUV1CNN}"};
+            m_offloadKernelReady = true;
+            xrt_core::message::send(severity_level::info, "XRT",
+                "Offload kernel prepared successfully.");
+            return true;
+        } catch (const std::exception& e) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                std::string("Failed to prepare Offload kernel: ") + e.what());
+            m_offloadKernelReady = false;
+            return false;
+        } catch (...) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                "Failed to prepare Offload kernel (unknown error).");
+            m_offloadKernelReady = false;
+            return false;
+        }
+    }
+
+    bool VE2Transaction::runOffloadKernel()
+    {
+        if (!m_offloadKernelReady) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                "Offload kernel was not prepared. Cannot Offload AIE trace.");
+            return false;
+        }
+        try {
+            xrt_core::message::send(severity_level::debug, "XRT", "Running pre-created Offload kernel");
+            xrt::run run{m_offloadKernel};
+            run.start();
+            run.wait2();
+            xrt_core::message::send(severity_level::debug, "XRT", "Offload run done!");
+            return true;
+        } catch (const std::exception& e) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                std::string("Offload kernel run failed: ") + e.what());
+            return false;
+        } catch (...) {
+            xrt_core::message::send(severity_level::warning, "XRT",
+                "Offload kernel run failed (unknown error).");
+            return false;
+        }
+    }
+
+
     // AIE Trace requires a flush ELF to force trace packets out of the tiles at end-of-run.  
     //
     // During flush ELF, creation of xrt::kernel calls ip_context::open() which accesses a

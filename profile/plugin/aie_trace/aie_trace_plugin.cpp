@@ -514,4 +514,53 @@ void AieTracePluginUnified::endPoll() {
     }
   }
 }
+
+
+void AieTracePluginUnified::runConstructorImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                                               const std::string& kernel_name, void* elf_handle)
+{
+  if (!xrt_core::config::get_aie_trace())
+    return;
+
+    xrt_core::message::send(severity_level::debug, "XRT",
+                            "AIE Trace: AieTracePluginUnified::runConstructorImpl ");
+  auto itr = handleToAIEData.find(hwctx);
+  if (itr == handleToAIEData.end() || !itr->second.implementation) {
+    xrt_core::message::send(severity_level::debug, "XRT",
+                            "AIE Trace: no implementation for hwctx in runConstructorHook");
+    return;
+  }
+
+  itr->second.implementation->onRunConstructor(run_impl_ptr, hwctx, run_uid, kernel_name, elf_handle);
+                                  AIEData.metadata->getOffloadIntervalUs());
+}
+
+void AieTracePluginUnified::runStartImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                                         const std::string& kernel_name)
+{
+  if (!xrt_core::config::get_aie_trace())
+    return;
+    xrt_core::message::send(severity_level::debug, "XRT",
+                            "AIE Trace: AieTracePluginUnified::runStartImpl ");
+
+  auto itr = handleToAIEData.find(hwctx);
+  if (itr == handleToAIEData.end() || !itr->second.implementation)
+    return;
+  itr->second.implementation->onRunStart(run_impl_ptr, hwctx, run_uid, kernel_name);
+}
+
+void AieTracePluginUnified::runWaitImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                                        const std::string& kernel_name, int ert_cmd_state)
+{
+  if (!xrt_core::config::get_aie_trace())
+    return;
+    xrt_core::message::send(severity_level::debug, "XRT",
+                            "AIE Trace: AieTracePluginUnified::runWaitImpl ");
+
+  auto itr = handleToAIEData.find(hwctx);
+  if (itr == handleToAIEData.end() || !itr->second.implementation)
+    return;
+  itr->second.implementation->onRunWait(run_impl_ptr, hwctx, run_uid, kernel_name, ert_cmd_state);
+}
+
 } // end namespace xdp

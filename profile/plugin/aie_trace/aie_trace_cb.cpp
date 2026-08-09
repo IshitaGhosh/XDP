@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2022-2023 Advanced Micro Devices, Inc. - All rights reserved
+ * Copyright (C) 2022-2026 Advanced Micro Devices, Inc. - All rights reserved
  *
  * Licensed under the Apache License, Version 2.0 (the "License"). You may
  * not use this file except in compliance with the License. A copy of the
@@ -43,6 +43,30 @@ namespace xdp {
     if (AieTracePluginUnified::alive())
       aieTracePluginInstance.finishFlushAIEDevice(handle);
   }
+
+  static void aieTraceRunConstructor(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                                      const char* kernel_name, void* elf_handle)
+  {
+    if (AieTracePluginUnified::alive())
+      aieTracePluginInstance.runConstructorHook(run_impl_ptr, hwctx, run_uid,
+                                                kernel_name ? kernel_name : "",
+                                                elf_handle);
+  }
+
+  static void aieTraceRunStart(void* run_impl_ptr, void* hwctx, uint32_t run_uid, const char* kernel_name)
+  {
+    if (AieTracePluginUnified::alive())
+      aieTracePluginInstance.runStartHook(run_impl_ptr, hwctx, run_uid,
+                                          kernel_name ? kernel_name : "");
+  }
+
+  static void aieTraceRunWait(void* run_impl_ptr, void* hwctx, uint32_t run_uid, const char* kernel_name,
+                              int ert_cmd_state)
+  {
+    if (AieTracePluginUnified::alive())
+      aieTracePluginInstance.runWaitHook(run_impl_ptr, hwctx, run_uid,
+                                         kernel_name ? kernel_name : "", ert_cmd_state);
+  }
   
 } // end namespace xdp
 
@@ -62,4 +86,24 @@ extern "C"
 void finishFlushAIEDevice(void* handle)
 {
   xdp::finishFlushAIEDevice(handle);
+}
+
+extern "C"
+void aieTraceRunConstructor(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
+                            const char* kernel_name, void* elf_handle)
+{
+  xdp::aieTraceRunConstructor(run_impl_ptr, hwctx, run_uid, kernel_name, elf_handle);
+}
+
+extern "C"
+void aieTraceRunStart(void* run_impl_ptr, void* hwctx, uint32_t run_uid, const char* kernel_name)
+{
+  xdp::aieTraceRunStart(run_impl_ptr, hwctx, run_uid, kernel_name);
+}
+
+extern "C"
+void aieTraceRunWait(void* run_impl_ptr, void* hwctx, uint32_t run_uid, const char* kernel_name,
+                     int ert_cmd_state)
+{
+  xdp::aieTraceRunWait(run_impl_ptr, hwctx, run_uid, kernel_name, ert_cmd_state);
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (C) 2022-2025 Advanced Micro Devices, Inc. All rights reserved
+// Copyright (C) 2022-2026 Advanced Micro Devices, Inc. All rights reserved
 
 #define XDP_PLUGIN_SOURCE
 
@@ -1213,6 +1213,36 @@ namespace xdp {
     aieDevice = static_cast<xaiefal::XAieDev*>(db->getStaticInfo().getAieDevice(allocateAieDevice, deallocateAieDevice, handle, deviceID));
     return aieDevInst;
   }
+
+  /****************************************************************************
+   * Run-lifecycle hooks (debug-only; verifies run_constructor/run_start/
+   * run_wait plumbing fires at runtime)
+   ***************************************************************************/
+  void AieTrace_VE2Impl::onRunConstructor(void* /*run_impl_ptr*/, void* /*hwctx*/, uint32_t run_uid,
+                                          const std::string& kernel_name, void* /*elf_handle*/)
+  {
+    xrt_core::message::send(severity_level::debug, "XRT",
+        "AIE Trace: onRunConstructor called for kernel '" + kernel_name
+        + "', run_uid=" + std::to_string(run_uid));
+  }
+
+  void AieTrace_VE2Impl::onRunStart(void* /*run_impl_ptr*/, void* /*hwctx*/, uint32_t run_uid,
+                                    const std::string& kernel_name)
+  {
+    xrt_core::message::send(severity_level::debug, "XRT",
+        "AIE Trace: onRunStart called for kernel '" + kernel_name
+        + "', run_uid=" + std::to_string(run_uid));
+  }
+
+  void AieTrace_VE2Impl::onRunWait(void* /*run_impl_ptr*/, void* /*hwctx*/, uint32_t run_uid,
+                                   const std::string& kernel_name, int ert_cmd_state)
+  {
+    xrt_core::message::send(severity_level::debug, "XRT",
+        "AIE Trace: onRunWait called for kernel '" + kernel_name
+        + "', run_uid=" + std::to_string(run_uid)
+        + ", ert_cmd_state=" + std::to_string(ert_cmd_state));
+  }
+
 }  // namespace xdp
 
 #else // XDNA flow
@@ -1923,13 +1953,32 @@ namespace xdp {
     }
 
     auto hwContextSubmit = metadata->getHwContext();
+#if 0
     if (!tranxHandler->submitTransaction(&aieDevInst, hwContextSubmit)) {
       xrt_core::message::send(severity_level::error, "XRT",
         "Aie trace control-code transaction submission failed.");
       return false;
     }
+#endif
+
+    tranxHandler->completeASM(&aieDevInst);
+    if (!tranxHandler->generateELF()) {
+       xrt_core::message::send(severity_level::error, "XRT",
+        "AIE trace set metrics ELF generation failed.");
+       return false;
+    }
+
+    xrt_core::message::send(severity_level::info, "XRT", "Successfully generated ELF for AIE Trace set metrics.");
+
+
+    tranxHandler->prepareMetricsKernel(hwContextSubmit);
+
     xrt_core::message::send(severity_level::info, "XRT", "Successfully scheduled AIE Trace.");
 
+    // Pre-create the flush kernel now while the hw_context and static
+    // infrastructure (dev2ips, ip_context) are still alive.  At flush
+    // time we reuse this kernel, avoiding ip_context::open() which
+    // would touch the already-destroyed static map during teardown.
     if (!tranxHandler->initializeTransaction(&aieDevInst, "AieTraceFlush" + std::to_string(deviceId))) {
       xrt_core::message::send(severity_level::error, "XRT",
         "AIE trace flush transaction initialization failed.");
@@ -2608,6 +2657,43 @@ namespace xdp {
   void AieTrace_VE2Impl::pollTimers(uint64_t /*index*/, void* /*handle*/) {}
   void* AieTrace_VE2Impl::setAieDeviceInst(void* /*handle*/, uint64_t /*deviceID*/) {}
   void AieTrace_VE2Impl::freeResources() {}
+
+  /****************************************************************************
+   * Run-lifecycle hooks (debug-only; verifies run_constructor/run_start/
+   * run_wait plumbing fires at runtime)
+   ***************************************************************************/
+  void AieTrace_VE2Impl::onRunConstructor(void* /*run_impl_ptr*/, void* /*hwctx*/, uint32_t run_uid,
+                                          const std::string& kernel_name, void* /*elf_handle*/)
+  {
+    xrt_core::message::send(severity_level::debug, "XRT",
+        "AIE Trace: onRunConstructor called for kernel '" + kernel_name
+        + "', run_uid=" + std::to_string(run_uid));
+    xrt_core::message::send(severity_level::info, "XRT", "Before AIE trace set metrics.");
+    if (!tranxHandler->runMetricsKernel()) {
+      xrt_core::message::send(severity_level::warning, "XRT",
+        "AIE trace set metircs control-code submission failed.");
+      return;
+    }
+    xrt_core::message::send(severity_level::info, "XRT", "Successfully scheduled AIE trace set metrics.");
+  }
+
+  void AieTrace_VE2Impl::onRunStart(void* /*run_impl_ptr*/, void* /*hwctx*/, uint32_t run_uid,
+                                    const std::string& kernel_name)
+  {
+    xrt_core::message::send(severity_level::debug, "XRT",
+        "AIE Trace: onRunStart called for kernel '" + kernel_name
+        + "', run_uid=" + std::to_string(run_uid));
+  }
+
+  void AieTrace_VE2Impl::onRunWait(void* /*run_impl_ptr*/, void* /*hwctx*/, uint32_t run_uid,
+                                   const std::string& kernel_name, int ert_cmd_state)
+  {
+    xrt_core::message::send(severity_level::debug, "XRT",
+        "AIE Trace: onRunWait called for kernel '" + kernel_name
+        + "', run_uid=" + std::to_string(run_uid)
+        + ", ert_cmd_state=" + std::to_string(ert_cmd_state));
+  }
+
 }  // namespace xdp
 
 #endif

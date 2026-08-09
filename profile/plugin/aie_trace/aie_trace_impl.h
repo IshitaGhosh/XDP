@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2022 Advanced Micro Devices, Inc. - All rights reserved
+ * Copyright (C) 2022-2026 Advanced Micro Devices, Inc. - All rights reserved
  *
  * Licensed under the Apache License, Version 2.0 (the "License"). You may
  * not use this file except in compliance with the License. A copy of the
@@ -88,6 +88,22 @@ namespace xdp {
      * @return Pointer to AIE device instance
      */
     virtual void* setAieDeviceInst(void* handle, uint64_t deviceID) = 0;
+
+    // Run-lifecycle hooks (extension seam only; no platform implementation
+    // yet). These mirror AieDtraceImpl::generateCTForRun so that per-run
+    // AIE trace configuration has a defined place to be added later without
+    // touching the plugin/glue layers again.
+    virtual void onRunConstructor(void* /*run_impl_ptr*/, void* /*hwctx*/,
+                                  uint32_t /*run_uid*/,
+                                  const std::string& /*kernel_name*/,
+                                  void* /*elf_handle*/) {}
+    virtual void onRunStart(void* /*run_impl_ptr*/, void* /*hwctx*/,
+                            uint32_t /*run_uid*/,
+                            const std::string& /*kernel_name*/) {}
+    virtual void onRunWait(void* /*run_impl_ptr*/, void* /*hwctx*/,
+                           uint32_t /*run_uid*/,
+                           const std::string& /*kernel_name*/,
+                           int /*ert_cmd_state*/) {}
   };
 
 } // namespace xdp
