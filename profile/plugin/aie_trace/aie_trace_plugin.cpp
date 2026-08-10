@@ -530,9 +530,9 @@ void AieTracePluginUnified::runConstructorImpl(void* run_impl_ptr, void* hwctx, 
                             "AIE Trace: no implementation for hwctx in runConstructorHook");
     return;
   }
-  auto &AIEData = itr->second;
+
   itr->second.implementation->onRunConstructor(run_impl_ptr, hwctx, run_uid, kernel_name, elf_handle);
-                                  AIEData.metadata->getOffloadIntervalUs());
+
 }
 
 void AieTracePluginUnified::runStartImpl(void* run_impl_ptr, void* hwctx, uint32_t run_uid,
