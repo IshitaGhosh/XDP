@@ -39,6 +39,7 @@ namespace xdp {
 #endif
 
    uint64_t deviceId;
+   uint32_t runId;
    uint64_t traceStreamId;
    io_type  offloadType;
 
@@ -50,7 +51,9 @@ namespace xdp {
     virtual void writeDependencies();
 
   public:
-    AIETraceWriter(const char* filename, uint64_t devId, uint64_t trStrmId,
+    AIETraceWriter(const char* filename, uint64_t devId,
+                   uint32_t rnId,
+                   uint64_t trStrmId,
                    const std::string& version, 
 		   const std::string& creationTime, 
 		   const std::string& xrtV,

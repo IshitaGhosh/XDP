@@ -35,7 +35,8 @@ namespace xdp {
   {
   private:
     // aie::TraceDataVector traceData;
-    std::map<io_type, aie::TraceDataVector> traceDataMap;
+    //std::map<io_type, aie::TraceDataVector> traceDataMap;
+    std::map<uint32_t /*run_uid*/, aie::TraceIODataMap> runTraceDataMap;
 
     SampleContainer samples;
     DoubleSampleContainer timerSamples;
@@ -50,9 +51,9 @@ namespace xdp {
     AIEDB() = default;
     XDP_CORE_EXPORT ~AIEDB();
 
-    void addAIETraceData(uint64_t strmIndex, void* buffer, uint64_t bufferSz,
+    void addAIETraceData(uint32_t runId, uint64_t strmIndex, void* buffer, uint64_t bufferSz,
                          bool copy, uint64_t numTraceStreams, io_type offloadType);
-    aie::TraceDataType* getAIETraceData(uint64_t strmIndex, io_type offloadType);
+    aie::TraceDataType* getAIETraceData(uint32_t runId, uint64_t strmIndex, io_type offloadType);
 
     void addAIESample(double timestamp, const std::vector<uint64_t>& values);
 

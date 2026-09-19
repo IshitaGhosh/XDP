@@ -240,6 +240,7 @@ namespace xdp {
   }
 
   void VPDynamicDatabase::addAIETraceData(uint64_t deviceId,
+                                          uint32_t runId,
                                           uint64_t strmIndex,
                                           void* buffer,
                                           uint64_t bufferSz,
@@ -247,15 +248,15 @@ namespace xdp {
                                           io_type offloadType)
   {
     auto device_db = getDeviceDB(deviceId);
-    device_db->addAIETraceData(strmIndex, buffer, bufferSz, copy,
+    device_db->addAIETraceData(runId, strmIndex, buffer, bufferSz, copy,
                                db->getStaticInfo().getNumAIETraceStream(deviceId, offloadType),
                                offloadType);
   }
 
-  aie::TraceDataType* VPDynamicDatabase::getAIETraceData(uint64_t deviceId, uint64_t strmIndex, io_type offloadType)
+  aie::TraceDataType* VPDynamicDatabase::getAIETraceData(uint64_t deviceId, uint32_t runId, uint64_t strmIndex, io_type offloadType)
   {
     auto device_db = getDeviceDB(deviceId);
-    return device_db->getAIETraceData(strmIndex, offloadType);
+    return device_db->getAIETraceData(runId, strmIndex, offloadType);
   }
 
   void VPDynamicDatabase::addPowerSample(uint64_t deviceId, double timestamp,

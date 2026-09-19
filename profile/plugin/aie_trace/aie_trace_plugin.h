@@ -77,7 +77,8 @@ private:
     bool valid = false;
     std::atomic<bool> pollAIETimerThreadCtrlBool{false};
     std::thread pollAIETimerThread;
-    std::unique_ptr<AIETraceOffloadManager> offloadManager;
+    std::map<uint32_t /*runid*/, std::unique_ptr<AIETraceOffloadManager>> offloadManagers;
+    //std::unique_ptr<AIETraceOffloadManager> offloadManager;
     std::unique_ptr<AieTraceImpl> implementation;
     std::shared_ptr<AieTraceMetadata> metadata;
   };

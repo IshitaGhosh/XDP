@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "xdp/profile/database/events/vtf_event.h"
+#include "xdp/profile/database/static_info/aie_constructs.h"
 
 namespace xdp {
 
@@ -81,6 +82,8 @@ namespace xdp::aie {
   };
 
   typedef std::vector<TraceDataType*> TraceDataVector;
+
+  typedef std::map<io_type, aie::TraceDataVector> TraceIODataMap;
 
   struct AIEDebugDataType
   {

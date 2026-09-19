@@ -96,13 +96,13 @@ namespace xdp {
     // inlined accesses to the AIE database object.
     // ****************************************************************
 
-    inline void addAIETraceData(uint64_t strmIndex, void* buffer,
+    inline void addAIETraceData(uint32_t runId, uint64_t strmIndex, void* buffer,
                                 uint64_t bufferSz, bool copy,
                                 uint64_t numStreams, io_type offloadType)
-    { aie_db.addAIETraceData(strmIndex, buffer, bufferSz, copy, numStreams, offloadType); }
+    { aie_db.addAIETraceData(runId, strmIndex, buffer, bufferSz, copy, numStreams, offloadType); }
 
-    inline aie::TraceDataType* getAIETraceData(uint64_t strmIndex, io_type offloadType)
-    { return aie_db.getAIETraceData(strmIndex, offloadType);  }
+    inline aie::TraceDataType* getAIETraceData(uint32_t runId, uint64_t strmIndex, io_type offloadType)
+    { return aie_db.getAIETraceData(runId, strmIndex, offloadType);  }
 
     inline
     void addAIESample(double timestamp, const std::vector<uint64_t>& values)

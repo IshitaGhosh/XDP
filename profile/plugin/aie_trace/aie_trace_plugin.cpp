@@ -254,6 +254,7 @@ void AieTracePluginUnified::updateAIEDevice(void *handle, bool hw_context_flow) 
 		      deviceID);
   }
 
+#if 0
   if (!AIEData.offloadManager)
     AIEData.offloadManager = std::make_unique<AIETraceOffloadManager>(deviceID, db, AIEData.implementation.get());
   
@@ -360,6 +361,7 @@ void AieTracePluginUnified::updateAIEDevice(void *handle, bool hw_context_flow) 
   } else {
     AIEData.pollAIETimerThreadCtrlBool = false;
   }
+#endif
 
   // Sets up and calls the PS kernel on x86 implementation
   // Sets up and the hardware on the edge implementation
@@ -368,10 +370,12 @@ void AieTracePluginUnified::updateAIEDevice(void *handle, bool hw_context_flow) 
 
   AIEData.implementation->updateDevice();
 
+#if 0
   // Continuous Trace Offload is supported only for PLIO flow
   if (AIEData.metadata->getContinuousTrace())
     offloaderManager->startOffload(AIEData.metadata->getContinuousTrace(),
                                   AIEData.metadata->getOffloadIntervalUs());
+#endif
   xrt_core::message::send(severity_level::info, "XRT",
                           "Finished AIE Trace updateAIEDevice.");
 }
@@ -417,8 +421,11 @@ void AieTracePluginUnified::flushAIEDevice(void *handle) {
 
   // Flush AIE then datamovers
   AIEData.implementation->flushTraceModules();
-  if (AIEData.offloadManager)
-    AIEData.offloadManager->flushAll(false);
+//  if (AIEData.offloadManager)
+//    AIEData.offloadManager->flushAll(false);
+
+  for (const auto& [runId, offloadManager] : AIEData.offloadManagers) {
+    offloadManager->flushAll(true);
 }
 
 void AieTracePluginUnified::finishFlushAIEDevice(void *handle) {
@@ -448,8 +455,10 @@ void AieTracePluginUnified::finishFlushAIEDevice(void *handle) {
 
   // Flush AIE then datamovers
   AIEData.implementation->flushTraceModules();
-  if (AIEData.offloadManager)
-    AIEData.offloadManager->flushAll(true);
+  //if (AIEData.offloadManager)
+  //  AIEData.offloadManager->flushAll(true);
+  for (const auto& [runId, offloadManager] : AIEData.offloadManagers) {
+    offloadManager->flushAll(true);
 
   XDPPlugin::endWrite();
 
@@ -469,8 +478,10 @@ void AieTracePluginUnified::writeAll(bool openNewFiles) {
 
     if (AIEData.valid) {
       AIEData.implementation->flushTraceModules();
-      if (AIEData.offloadManager)
-        AIEData.offloadManager->flushAll(true);
+      //if (AIEData.offloadManager)
+      //  AIEData.offloadManager->flushAll(true);
+      for (const auto& [runId, offloadManager] : AIEData.offloadManagers) {
+        offloadManager->flushAll(true);
     }
   }
 
@@ -530,8 +541,12 @@ void AieTracePluginUnified::runConstructorImpl(void* run_impl_ptr, void* hwctx, 
                             "AIE Trace: no implementation for hwctx in runConstructorHook");
     return;
   }
-
+  setupTraceOffload(hwctx, run_uid);
   itr->second.implementation->onRunConstructor(run_impl_ptr, hwctx, run_uid, kernel_name, elf_handle);
+// Continuous Trace Offload is supported only for PLIO flow
+//  if (AIEData.metadata->getContinuousTrace())
+//    offloaderManager->startOffload(AIEData.metadata->getContinuousTrace(),
+//                                  AIEData.metadata->getOffloadIntervalUs());
 
 }
 
@@ -562,5 +577,126 @@ void AieTracePluginUnified::runWaitImpl(void* run_impl_ptr, void* hwctx, uint32_
     return;
   itr->second.implementation->onRunWait(run_impl_ptr, hwctx, run_uid, kernel_name, ert_cmd_state);
 }
+
+void AieTracePluginUnified::setupTraceOffload(void* handle, uint32_t run_uid)
+{
+  auto &AIEData = handleToAIEData[handle];
+  auto deviceID = getDeviceIDFromHandle(handle);
+
+  // Directly create no need to check ??
+  AIEData.offloadManagers.emplace(run_uid, std::make_unique<AIETraceOffloadManager>(deviceID, run_uid, db, AIEData.implementation.get()));
+//  if (!AIEData.offloadManager)
+//    AIEData.offloadManager = std::make_unique<AIETraceOffloadManager>(deviceID, db, AIEData.implementation.get());
+  uint64_t numStreamsPLIO = AIEData.metadata->getNumStreamsPLIO();
+  uint64_t numStreamsGMIO = AIEData.metadata->getNumStreamsGMIO();
+  bool isPLIO = (numStreamsPLIO > 0) ? true : false;
+  bool isGMIO = (numStreamsGMIO > 0) ? true : false;
+
+  PLDeviceIntf *deviceIntf = (db->getStaticInfo()).getDeviceIntf(deviceID);
+
+  AIEData.offloadManagers[run_uid]->createTraceWriters(numStreamsPLIO, numStreamsGMIO, writers);
+
+  // Ensure trace buffer size is appropriate
+  uint64_t aieTraceBufSize = GetTS2MMBufSize(true /*isAIETrace*/);
+  // uint64_t aieTraceBufSizePLIO = aieTraceBufSize;
+  // uint64_t aieTraceBufSizeGMIO = aieTraceBufSize;
+  if (isPLIO && !configuredOnePlioPartition) {
+#if defined(XDP_VE2_BUILD) && defined(XDP_VE2_ZOCL_BUILD) // PLIO flow for VE2 ZOCL build only
+    XAie_DevInst* devInst = static_cast<XAie_DevInst*>(AIEData.implementation->setAieDeviceInst(handle, deviceID));
+    if(!devInst) {
+      xrt_core::message::send(severity_level::warning, "XRT",
+        "Unable to get AIE device instance. AIE event trace will not be available.");
+      return;
+    }
+    AIEData.offloadManagers[run_uid]->configureAndInitPLIO(handle, deviceIntf, aieTraceBufSize,
+                                      AIEData.metadata->getNumStreamsPLIO(), devInst);
+#endif
+    configuredOnePlioPartition = true;
+  }
+
+  if (isGMIO) {
+#if defined(XDP_CLIENT_BUILD) || (defined(XDP_VE2_BUILD) && !defined(XDP_VE2_ZOCL_BUILD))
+  if (!AIEData.offloadManagers[run_uid]->configureAndInitGMIO(
+        handle, deviceIntf, aieTraceBufSize,
+        AIEData.metadata->getNumStreamsGMIO(),
+        AIEData.metadata->getHwContext(), AIEData.metadata))
+    return;
+#else
+  XAie_DevInst* devInst =
+    static_cast<XAie_DevInst*>(AIEData.implementation->setAieDeviceInst(handle, deviceID));
+  if (!AIEData.offloadManagers[run_uid]->configureAndInitGMIO(
+        handle, deviceIntf, aieTraceBufSize,
+        AIEData.metadata->getNumStreamsGMIO(), devInst))
+    return;
+#endif
+  }
+
+  auto &offloaderManager = AIEData.offloadManagers[run_uid];
+  try {
+    if (!offloaderManager->initReadTraces()) {
+      xrt_core::message::send(severity_level::warning, "XRT",
+                              AIE_TRACE_BUF_ALLOC_FAIL);
+      AIEData.valid = false;
+      return;
+    }
+  } catch (const std::bad_alloc&) {
+    xrt_core::message::send(severity_level::warning, "XRT",
+                            AIE_TRACE_BUF_ALLOC_FAIL);
+    AIEData.valid = false;
+    return;
+  } catch (...) {
+    std::string msg = "AIE trace is currently not supported on this platform.";
+    xrt_core::message::send(xrt_core::message::severity_level::warning, "XRT",
+                            msg);
+    AIEData.valid = false;
+    return;
+  }
+
+  // System timeline: enable on single-partition designs
+  // (load_xclbin and register_xclbin / hw_context flows). 
+  const bool iniEnableTimeline =
+      xrt_core::config::get_aie_trace_settings_enable_system_timeline();
+  const auto &overlayCols = AIEData.metadata->getPartitionOverlayStartCols();
+  const bool multipartitionDesign = (overlayCols.size() > 1);
+  const bool enableSystemTimeline = iniEnableTimeline && !multipartitionDesign;
+
+  // Support system timeline
+  if (enableSystemTimeline) {
+#ifdef _WIN32
+    std::string deviceName = "win_device";
+#else
+    std::string deviceName = util::getDeviceName(handle, true);
+#endif
+
+    // Writer for timestamp file
+    std::string outputFile = "aie_event_timestamps.bin";
+    auto tsWriter = new AIETraceTimestampsWriter(outputFile.c_str(),
+                                                 deviceName.c_str(), deviceID);
+    writers.push_back(tsWriter);
+    db->addOpenedFile(tsWriter->getcurrentFileName(),
+                      "AIE_EVENT_TRACE_TIMESTAMPS",
+		      deviceID);
+
+    // Start the AIE trace timestamps thread
+    // NOTE: we purposely start polling before configuring trace events
+    uint32_t maxSamples = AIEData.metadata->getMaxTimerSamples();
+    //AIE trace timestamps writer writes 36 bytes per sample
+    uint64_t estimatedBytes = static_cast<uint64_t>(maxSamples) * 36;
+    std::stringstream msg;
+    msg << "AIE system timeline: max_timer_samples=" << maxSamples
+        << " (~" << (estimatedBytes / (1024*1024)) << " MB timestamps.bin).";
+    xrt_core::message::send(severity_level::info, "XRT", msg.str());
+
+    AIEData.pollAIETimerThreadCtrlBool = true;
+    auto device_thread = std::thread(&AieTracePluginUnified::pollAIETimers,
+                                     this, deviceID, handle);
+    AIEData.pollAIETimerThread = std::move(device_thread);
+  } else {
+    AIEData.pollAIETimerThreadCtrlBool = false;
+  }
+}
+
+
+
 
 } // end namespace xdp

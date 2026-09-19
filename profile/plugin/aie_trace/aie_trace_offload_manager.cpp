@@ -40,8 +40,9 @@ uint64_t AIETraceOffloadManager::checkAndCapToBankSize(uint8_t memIndex, uint64_
   return desired;
 }
 
-  AIETraceOffloadManager::AIETraceOffloadManager(uint64_t device_id, VPDatabase* database, AieTraceImpl* impl)
+  AIETraceOffloadManager::AIETraceOffloadManager(uint64_t device_id, uint32_t rnId, VPDatabase* database, AieTraceImpl* impl)
     : deviceID{device_id},
+      runId(rnId),
       db{database},
       aieTraceImpl{impl},
       offloadEnabledPLIO(true),
@@ -57,7 +58,7 @@ uint64_t AIETraceOffloadManager::checkAndCapToBankSize(uint8_t memIndex, uint64_
     if (!offloadEnabledPLIO)
       return;
 
-    plio.logger = std::make_unique<AIETraceDataLogger>(deviceID, io_type::PLIO);
+    plio.logger = std::make_unique<AIETraceDataLogger>(deviceID, runId, io_type::PLIO);
 #ifndef XDP_CLIENT_BUILD
     plio.offloader = std::make_unique<AIETraceOffload>(handle, deviceID, deviceIntf, plio.logger.get(), true, bufSize, numStreams, devInst);
 #else
@@ -86,7 +87,7 @@ uint64_t AIETraceOffloadManager::checkAndCapToBankSize(uint8_t memIndex, uint64_
     if (!offloadEnabledGMIO)
       return;
 
-    gmio.logger = std::make_unique<AIETraceDataLogger>(deviceID, io_type::GMIO);
+    gmio.logger = std::make_unique<AIETraceDataLogger>(deviceID, runId, io_type::GMIO);
     // Use the client-specific AIETraceOffload constructor
     gmio.offloader = std::make_unique<AIETraceOffload>(
         handle, deviceID, deviceIntf, gmio.logger.get(), false, // isPLIO = false
@@ -106,7 +107,7 @@ uint64_t AIETraceOffloadManager::checkAndCapToBankSize(uint8_t memIndex, uint64_
       return;
     }
 
-    gmio.logger = std::make_unique<AIETraceDataLogger>(deviceID, io_type::GMIO);
+    gmio.logger = std::make_unique<AIETraceDataLogger>(deviceID, runId, io_type::GMIO);
     gmio.offloader = std::make_unique<AIETraceOffload>(handle, deviceID, deviceIntf, gmio.logger.get(), false, bufSize, numStreams, devInst);
     gmio.valid = true;
     std::stringstream msg;
@@ -167,10 +168,12 @@ uint64_t AIETraceOffloadManager::checkAndCapToBankSize(uint8_t memIndex, uint64_
       // Add writer for every PLIO stream
       for (uint64_t n = 0; n < numStreamsPLIO; ++n) {
         std::string fileName = "aie_trace_plio_" + std::to_string(deviceID) + "_" +
-                              std::to_string(n) + ".txt";
+                               "_run_" + std::to_string(runId) +
+                               "_stream_" + std::to_string(n) + ".txt";
         VPWriter *writer = new AIETraceWriter(
           fileName.c_str(),
           deviceID,
+          runId,
           n,  // stream id
           "", // version
           "", // creation time
@@ -191,10 +194,12 @@ uint64_t AIETraceOffloadManager::checkAndCapToBankSize(uint8_t memIndex, uint64_
       // Add writer for every GMIO stream
       for (uint64_t n = 0; n < numStreamsGMIO; ++n) {
         std::string fileName = "aie_trace_gmio_" + std::to_string(deviceID) + "_" +
-                              std::to_string(n) + ".txt";
+                               "_run_" + std::to_string(runId) +
+                               "_stream_" + std::to_string(n) + ".txt";
         VPWriter *writer = new AIETraceWriter(
           fileName.c_str(),
           deviceID,
+          runId,
           n,  // stream id
           "", // version
           "", // creation time

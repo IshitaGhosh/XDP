@@ -27,13 +27,14 @@ namespace xdp {
 class AIETraceDataLogger : public AIETraceLogger
 {
   uint64_t deviceId = 0;
+  uint32_t runId = 0;
   io_type offloadType = io_type::PLIO;
   VPDatabase* db = nullptr;
 
 public:
 
   XDP_CORE_EXPORT
-  AIETraceDataLogger(uint64_t devId, io_type oType);
+  AIETraceDataLogger(uint64_t devId, uint32_t runId, io_type oType);
   XDP_CORE_EXPORT
   virtual ~AIETraceDataLogger();
 

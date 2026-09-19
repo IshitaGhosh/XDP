@@ -26,7 +26,9 @@ namespace xdp {
   constexpr uint64_t LARGE_DATA_WARN_THRESHOLD = 0xA00000;
   bool AIETraceWriter::largeDataWarning = false;
 
-  AIETraceWriter::AIETraceWriter(const char* filename, uint64_t devId, uint64_t trStrmId,
+  AIETraceWriter::AIETraceWriter(const char* filename, uint64_t devId,
+                                 uint32_t rnId,
+                                 uint64_t trStrmId,
                                  const std::string& version, 
                                  const std::string& creationTime, 
                                  const std::string& /*xrtV*/, 
@@ -34,6 +36,7 @@ namespace xdp {
                                  io_type oType)
     : VPTraceWriter(filename, version, creationTime, 6 /* us */),
       deviceId(devId),
+      runId(rnId),
       traceStreamId(trStrmId),
       offloadType(oType)
 #if 0
@@ -49,6 +52,7 @@ namespace xdp {
       if (fout.is_open()) {
         if (fout.tellp() <= 0) {
           std::string msg = "File: " + getcurrentFileName() + " (device #" + std::to_string(deviceId) 
+              + ", run #" + std::to_string(runId) 
               + ", stream #" + std::to_string(traceStreamId) + ") trace data was not captured.";
           xrt_core::message::send(xrt_core::message::severity_level::warning, "XRT", msg);
         }
@@ -75,7 +79,7 @@ namespace xdp {
   void AIETraceWriter::writeTraceEvents()
   {
     // write the entire buffer
-    aie::TraceDataType* traceData = (db->getDynamicInfo()).getAIETraceData(deviceId, traceStreamId, offloadType);
+    aie::TraceDataType* traceData = (db->getDynamicInfo()).getAIETraceData(deviceId, runId, traceStreamId, offloadType);
     if (nullptr == traceData) {
       return;
     }

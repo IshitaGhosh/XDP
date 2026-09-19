@@ -50,6 +50,7 @@ class AIETraceOffloadManager {
     uint64_t checkAndCapToBankSize(uint8_t memIndex, uint64_t desired);
 
     uint64_t deviceID;
+    uint32_t runId;
     VPDatabase* db;
     AieTraceImpl* aieTraceImpl = nullptr;
     AIETraceOffloadData plio;
@@ -58,7 +59,7 @@ class AIETraceOffloadManager {
     bool offloadEnabledGMIO = false;
 
   public:
-    AIETraceOffloadManager(uint64_t device_id, VPDatabase* database, AieTraceImpl* impl=nullptr);
+    AIETraceOffloadManager(uint64_t device_id, uint32_t rnId, VPDatabase* database, AieTraceImpl* impl=nullptr);
     void initPLIO(void* handle, PLDeviceIntf* deviceIntf, uint64_t bufSize, uint64_t numStreams, XAie_DevInst* devInst);
 
     // TODO: Use const references for parameters where applicable

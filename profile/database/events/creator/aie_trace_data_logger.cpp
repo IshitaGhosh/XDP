@@ -21,9 +21,10 @@
 
 namespace xdp {
 
-AIETraceDataLogger::AIETraceDataLogger(uint64_t devId, io_type oType)
+AIETraceDataLogger::AIETraceDataLogger(uint64_t devId, uint32_t rnId, io_type oType)
            : AIETraceLogger(),
              deviceId(devId),
+             runId(rnId),
              offloadType(oType),
              db(VPDatabase::Instance())
 {
@@ -38,7 +39,7 @@ void AIETraceDataLogger::addAIETraceData(uint64_t strmIndex, void* buffer, uint6
   if(!VPDatabase::alive()) {
     return;
   }
-  db->getDynamicInfo().addAIETraceData(deviceId, strmIndex, buffer, bufferSz, copy, offloadType);
+  db->getDynamicInfo().addAIETraceData(deviceId, runId, strmIndex, buffer, bufferSz, copy, offloadType);
 }
 
 }
