@@ -96,13 +96,32 @@ namespace xdp {
       return false;
     }
 
+    // Full-ELF add_config() rejects an ELF whose partition column count differs
+    // from the hw_context's, so use the actual partition width instead of
+    // metadata num_columns (halted tiles are partition-relative). The xclbin
+    // flow does not enforce this and keeps num_columns.
+    bool isFullELFFlow = false;
+    size_t partitionSize = 0;
+    uint8_t numColumns = meta_config.num_columns;
+    try {
+      isFullELFFlow = xrt_core::hw_context_int::get_elf_flow(hwContext);
+      if (isFullELFFlow) {
+        partitionSize = xrt_core::hw_context_int::get_partition_size(hwContext);
+        if (partitionSize > 0)
+          numColumns = static_cast<uint8_t>(partitionSize);
+      }
+    } catch (const std::exception& e) {
+      xrt_core::message::send(severity_level::warning, "XRT",
+                std::string("Failed to query ELF flow for AIE halt, assuming xclbin flow: ") + e.what());
+    }
+
     XAie_Config cfg {
       meta_config.hw_gen,
       meta_config.base_address,
       meta_config.column_shift,
       meta_config.row_shift,
       meta_config.num_rows,
-      meta_config.num_columns,
+      numColumns,
       meta_config.shim_row,
       meta_config.mem_row_start,
       meta_config.mem_num_rows,
@@ -126,10 +145,21 @@ namespace xdp {
       break;
     }
 
+    // Full-ELF control code addresses tiles relative to the partition, so the
+    // absolute start column reported by the driver does not apply.
+    if (isFullELFFlow && partitionSize > 0) {
+      startCol = 0;
+      numCols = numColumns;
+    }
+
     std::stringstream msg;
     msg << "Set AIE Core breakpoint at Lock Acquire Req Instr, Start col "
         << startCol << ", Num col " << numCols;
     xrt_core::message::send(severity_level::info, "XRT", msg.str());
+
+    // Submit through the path matching the hw_context: add_config for full ELF,
+    // xrt::module for xclbin.
+    tranxHandler->setElfFlow(isFullELFFlow);
 
     // Record driver calls into the control code ASM.
     if (!tranxHandler->initializeTransaction(&aieDevInst, "AieHalt")) {
@@ -179,10 +209,26 @@ namespace xdp {
       return;
     }
 
-    xrt::module mod{haltElf};
+    // Full-ELF flow registers the ELF via add_config() and opens the kernel by
+    // name; the xclbin flow uses an explicit xrt::module.
+    bool isFullELFFlow = false;
+    try {
+      isFullELFFlow = xrt_core::hw_context_int::get_elf_flow(hwContext);
+    } catch (const std::exception& e) {
+      xrt_core::message::send(xrt_core::message::severity_level::warning, "XRT",
+                std::string("Failed to query ELF flow for AIE halt, assuming xclbin flow: ") + e.what());
+    }
+
     xrt::kernel krnl;
     try {
-      krnl = xrt::ext::kernel{hwContext, mod, "XDP_KERNEL:{IPUV1CNN}"};
+      if (isFullELFFlow) {
+        hwContext.add_config(haltElf);
+        krnl = xrt::ext::kernel{hwContext, "XDP_KERNEL:IPUV1CNN"};
+      }
+      else {
+        xrt::module mod{haltElf};
+        krnl = xrt::ext::kernel{hwContext, mod, "XDP_KERNEL:{IPUV1CNN}"};
+      }
     } catch (...) {
       xrt_core::message::send(xrt_core::message::severity_level::warning, "XRT",
                 "XDP_KERNEL not found in HW Context. Cannot configure AIE to halt.");
