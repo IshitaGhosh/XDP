@@ -339,14 +339,14 @@ namespace xdp {
         auto iter0 = configChannel0.find(tile);
         auto iter1 = configChannel1.find(tile);
         uint8_t channel0 = (iter0 == configChannel0.end()) ? 0 : iter0->second;
-        uint8_t channel1 = (iter1 == configChannel1.end()) ? 1 : iter1->second;
+        uint8_t channel1 = (iter1 == configChannel1.end()) ? channel0 : iter1->second;
         
         // Modify events as needed
         aie::profile::modifyEvents(type, subtype, channel0, startEvents, metadata->getHardwareGen());
         endEvents = startEvents;
 
         // TBD : Placeholder to configure AIE core with required profile counters.
-        aie::profile::configEventSelections(aieDevInst, loc, type, metricSet, channel0);
+        aie::profile::configEventSelections(aieDevInst, loc, type, metricSet, channel0, channel1);
         // TBD : Placeholder to configure shim tile with required profile counters.
 
         aie::profile::configStreamSwitchPorts(tileMetric.first, xaieTile, loc, type, 

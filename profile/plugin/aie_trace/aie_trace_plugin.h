@@ -62,7 +62,7 @@ protected:
 
 
 private:
-  uint64_t getDeviceIDFromHandle(void *handle);
+  uint64_t getDeviceIDFromHandle(void *handle, bool isFullELFFlow = false);
   void pollAIETimers(uint64_t index, void *handle);
   // void flushOffloader(const std::unique_ptr<AIETraceOffload> &offloader,
   //                     bool warn);
