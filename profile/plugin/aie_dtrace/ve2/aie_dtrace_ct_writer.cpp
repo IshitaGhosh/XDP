@@ -1710,7 +1710,7 @@ void AieDtraceCTWriter::appendComputeIoBoundConfig(
       {"aie_memory", 0, prefix + "_lock_" + spec.comboNameB},
       {"aie_memory", 1, prefix + "_lock_" + spec.comboNameD},
       {"aie",        2, prefix + "_running"},
-      {"aie",        3, prefix + "_running_tlast"},
+      {"aie",        3, prefix + "_tlast_to_running"},
       {"aie_memory", 2, prefix + "_tlast"}
     };
 
@@ -2347,10 +2347,10 @@ std::vector<CTRegisterWrite> AieDtraceCTWriter::generateDmaTileCoreConfig(
   // Performance_Control0 is left alone here for the same reason as on the first tile.
   addWrite(CM_PERF_CTRL1,
            counterEventPair(CORE_PORT_RUNNING_0_EVENT, 0)
-             | (static_cast<uint32_t>(CORE_PORT_RUNNING_0_EVENT & 0x7F) << 16)
-             | (static_cast<uint32_t>(CORE_PORT_TLAST_0_EVENT & 0x7F) << 24),
-           "PerfCtrl1 @ " + loc + " (ctr2 = Port_Running_0, ctr3 = Port_Running_0 to "
-           + "Port_TLAST_0, " + spec.dmaName + ")");
+             | (static_cast<uint32_t>(CORE_PORT_TLAST_0_EVENT & 0x7F) << 16)
+             | (static_cast<uint32_t>(CORE_PORT_RUNNING_0_EVENT & 0x7F) << 24),
+           "PerfCtrl1 @ " + loc + " (ctr2 = Port_Running_0, ctr3 = Port_TLAST_0 to "
+           + "Port_Running_0, " + spec.dmaName + ")");
 
   return writes;
 }

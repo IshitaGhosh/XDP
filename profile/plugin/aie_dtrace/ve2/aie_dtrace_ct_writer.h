@@ -529,10 +529,11 @@ private:
    *
    * Points stream switch monitor slot 0 at the spec's DMA port. Counter 2 counts the
    * cycles Port_Running_0 is asserted (Start == Stop), and counter 3 the cycles from
-   * Port_Running_0 to Port_TLAST_0. Edge detector 0 turns Port_TLAST_0 into a one-cycle
-   * rising-edge event, which is broadcast to the memory module together with the lock
-   * stall; both broadcasts are blocked everywhere but east, the internal link to the
-   * memory module. Only Performance_Control1 is written, as on the first tile.
+   * Port_TLAST_0 to the next Port_Running_0 (the gap between transfers). Edge detector 0
+   * turns Port_TLAST_0 into a one-cycle rising-edge event, which is broadcast to the
+   * memory module together with the lock stall; both broadcasts are blocked everywhere
+   * but east, the internal link to the memory module. Only Performance_Control1 is
+   * written, as on the first tile.
    *
    * @param column Partition-relative core tile column
    * @param row Absolute core tile row
