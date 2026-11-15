@@ -104,12 +104,14 @@ AieDtraceCTWriter::AieDtraceCTWriter(VPDatabase* database,
     , columnShift(0)
     , rowShift(0)
     , coreRowStart(0)
+    , coreNumRows(0)
     , partitionStartCol(startCol)
 {
   auto config = metadata->getAIEConfigMetadata();
   columnShift = config.column_shift;
   rowShift = config.row_shift;
   coreRowStart = config.aie_tile_row_start;
+  coreNumRows = config.aie_tile_num_rows;
 }
 
 bool AieDtraceCTWriter::generate()
@@ -1627,7 +1629,7 @@ bool AieDtraceCTWriter::appendPlioBandwidthConfig(
 void AieDtraceCTWriter::appendComputeIoBoundConfig(
     std::vector<CTCounterInfo>& counters, std::vector<CTRegisterWrite>& beginWrites)
 {
-  // The metric spans two tiles. The first uses both modules: only control registers it
+  // The metric spans up to four tiles. The first uses both modules: only control registers it
   // fully owns are written, which limits the core module to counters 2 and 3
   // (Performance_Control1); the four individual stalls are broadcast to the memory
   // module, whose counters 0-3 are all free on AIE tiles. The listing/metadata use
@@ -1670,52 +1672,69 @@ void AieDtraceCTWriter::appendComputeIoBoundConfig(
   auto memoryWrites = generateComputeMemoryConfig(COMPUTE_IO_CORE_COL, row);
   beginWrites.insert(beginWrites.end(), memoryWrites.begin(), memoryWrites.end());
 
-  // The tile above pairs its core's lock stall with its own DMA events. All four counters
-  // of the first tile's memory module are already taken, and these events belong to the
-  // DMA of whichever tile hosts them, so they need a tile of their own. The starvation
-  // pair takes that memory module's two combos, so the backpressure pair uses the core
-  // module's combos and its free counters 2 and 3.
-  const uint8_t lockStarvationRow =
-      static_cast<uint8_t>(coreRowStart + LOCK_STARVATION_ROW_OFFSET);
-
-  struct CorrelationCounterLayout {
-    const char* module;
-    uint8_t counterNumber;
-    uint8_t channel;
-    const char* eventType;
+  // The tiles above each watch one of their own DMA channels. These events belong to the
+  // DMA of whichever tile hosts them, and the first tile's memory module counters are
+  // all taken, so each channel gets a tile of its own.
+  const DmaTileSpec dmaTiles[] = {
+    {1, 0, CORE_DMA_S2MM_0_PORT, true,
+     MEM_DMA_S2MM_0_STREAM_STARVATION_EVENT, MEM_DMA_S2MM_0_MEMORY_BACKPRESSURE_EVENT,
+     "s2mm0", "stream_starvation", "memory_backpressure"},
+    {2, 1, CORE_DMA_S2MM_1_PORT, true,
+     MEM_DMA_S2MM_1_STREAM_STARVATION_EVENT, MEM_DMA_S2MM_1_MEMORY_BACKPRESSURE_EVENT,
+     "s2mm1", "stream_starvation", "memory_backpressure"},
+    {3, 0, CORE_DMA_MM2S_0_PORT, false,
+     MEM_DMA_MM2S_0_MEMORY_STARVATION_EVENT, MEM_DMA_MM2S_0_STREAM_BACKPRESSURE_EVENT,
+     "mm2s0", "memory_starvation", "stream_backpressure"}
   };
 
-  const CorrelationCounterLayout lockCorrelationLayout[] = {
-    {"aie_memory", 0, 0, "lock_starvation_ch0"},
-    {"aie_memory", 1, 1, "lock_starvation_ch1"},
-    {"aie",        2, 0, "lock_backpressure_ch0"},
-    {"aie",        3, 1, "lock_backpressure_ch1"}
-  };
+  for (const auto& spec : dmaTiles) {
+    if (spec.rowOffset >= coreNumRows) {
+      std::stringstream msg;
+      msg << "AIE dtrace: compute_io_bound skips the " << spec.dmaName
+          << " tile at core row offset " << static_cast<int>(spec.rowOffset)
+          << "; the partition has only " << static_cast<int>(coreNumRows) << " core rows.";
+      xrt_core::message::send(severity_level::warning, "XRT", msg.str());
+      continue;
+    }
 
-  for (const auto& entry : lockCorrelationLayout) {
-    CTCounterInfo info;
-    info.column = COMPUTE_IO_CORE_COL;
-    info.row = lockStarvationRow;
-    info.counterNumber = entry.counterNumber;
-    info.channel = entry.channel;
-    info.module = entry.module;
-    info.address = calculateCounterAddress(COMPUTE_IO_CORE_COL, lockStarvationRow,
-                                           entry.counterNumber, entry.module);
-    info.metricSet = "compute_io_bound";
-    info.portDirection = "";
-    info.eventType = entry.eventType;
-    counters.push_back(info);
+    const uint8_t dmaRow = static_cast<uint8_t>(coreRowStart + spec.rowOffset);
+    const std::string prefix = spec.dmaName;
+
+    struct DmaCounterLayout {
+      const char* module;
+      uint8_t counterNumber;
+      std::string eventType;
+    };
+
+    const DmaCounterLayout dmaLayout[] = {
+      {"aie_memory", 0, prefix + "_lock_" + spec.comboNameB},
+      {"aie_memory", 1, prefix + "_lock_" + spec.comboNameD},
+      {"aie",        2, prefix + "_running"},
+      {"aie",        3, prefix + "_running_tlast"},
+      {"aie_memory", 2, prefix + "_tlast"}
+    };
+
+    for (const auto& entry : dmaLayout) {
+      CTCounterInfo info;
+      info.column = COMPUTE_IO_CORE_COL;
+      info.row = dmaRow;
+      info.counterNumber = entry.counterNumber;
+      info.channel = spec.dmaChannel;
+      info.module = entry.module;
+      info.address = calculateCounterAddress(COMPUTE_IO_CORE_COL, dmaRow,
+                                             entry.counterNumber, entry.module);
+      info.metricSet = "compute_io_bound";
+      info.portDirection = "";
+      info.eventType = entry.eventType;
+      counters.push_back(info);
+    }
+
+    auto dmaCoreWrites = generateDmaTileCoreConfig(COMPUTE_IO_CORE_COL, dmaRow, spec);
+    beginWrites.insert(beginWrites.end(), dmaCoreWrites.begin(), dmaCoreWrites.end());
+
+    auto dmaMemoryWrites = generateDmaTileMemoryConfig(COMPUTE_IO_CORE_COL, dmaRow, spec);
+    beginWrites.insert(beginWrites.end(), dmaMemoryWrites.begin(), dmaMemoryWrites.end());
   }
-
-  auto lockStarvationCoreWrites =
-      generateLockStarvationCoreConfig(COMPUTE_IO_CORE_COL, lockStarvationRow);
-  beginWrites.insert(beginWrites.end(),
-                     lockStarvationCoreWrites.begin(), lockStarvationCoreWrites.end());
-
-  auto lockStarvationMemoryWrites =
-      generateLockStarvationMemoryConfig(COMPUTE_IO_CORE_COL, lockStarvationRow);
-  beginWrites.insert(beginWrites.end(),
-                     lockStarvationMemoryWrites.begin(), lockStarvationMemoryWrites.end());
 }
 
 //=============================================== L2-L2 transfers ================================================
@@ -2272,59 +2291,54 @@ std::vector<CTRegisterWrite> AieDtraceCTWriter::generateMemtilePerfCounterConfig
   return writes;
 }
 
-std::vector<CTRegisterWrite> AieDtraceCTWriter::generateLockStarvationCoreConfig(
-    uint8_t column, uint8_t row)
+std::vector<CTRegisterWrite> AieDtraceCTWriter::generateDmaTileCoreConfig(
+    uint8_t column, uint8_t row, const DmaTileSpec& spec)
 {
   std::vector<CTRegisterWrite> writes;
 
   uint64_t tileAddress = (static_cast<uint64_t>(column) << columnShift) |
                          (static_cast<uint64_t>(row) << rowShift);
 
-  auto addWrite = [&](uint64_t offset, uint32_t value, const std::string& comment) {
+  auto addWrite = [&](uint64_t offset, uint32_t value, const std::string& comment,
+                      uint32_t mask = 0xFFFFFFFF) {
     CTRegisterWrite w;
     w.address = tileAddress + offset;
     w.value = value;
     w.comment = comment;
+    w.mask = mask;
     writes.push_back(w);
   };
 
   std::string loc = "core (" + std::to_string(column) + "," + std::to_string(row) + ")";
 
-  // A combo event can only combine events of one module, and the DMA starvation events
-  // belong to the memory module, so the lock stall has to travel there as a broadcast.
+  // Only monitor slot 0 is written, so the other slots keep whatever owns them.
+  const uint32_t portSel = (static_cast<uint32_t>(spec.portId) & 0x1F)
+                         | (spec.isMaster ? PORT_SEL_MASTER_BIT : 0);
+  addWrite(STREAM_SWITCH_EVENT_PORT_SEL_OFFSET, portSel,
+           "Stream_Switch_Event_Port_Selection_0 slot0 @ " + loc + " = "
+           + (spec.isMaster ? "master " : "slave ") + std::to_string(spec.portId)
+           + " (" + spec.dmaName + ")",
+           PORT_SEL_SLOT0_MASK);
+
+  // Port_TLAST_0 is turned into a single-cycle rising edge before it is broadcast, so the
+  // memory module counts one per TLAST beat rather than per asserted cycle.
+  addWrite(CM_EDGE_DETECTION_CTRL,
+           (static_cast<uint32_t>(CORE_PORT_TLAST_0_EVENT) & 0x7F) | EDGE_DET0_RISING,
+           "Edge_Detection_event_control @ " + loc + " (event0 = Port_TLAST_0, rising)",
+           EDGE_DET0_MASK);
+
+  // A combo event can only combine events of one module, and the DMA events belong to
+  // the memory module, so the lock stall has to travel there as a broadcast.
   addWrite(CM_EVENT_BROADCAST0 + 4 * LOCK_STALL_BCAST_CHANNEL, LOCK_STALL_EVENT,
            "Event_Broadcast" + std::to_string(LOCK_STALL_BCAST_CHANNEL) + " @ " + loc
            + " = lock stall");
+  addWrite(CM_EVENT_BROADCAST0 + 4 * TLAST_BCAST_CHANNEL, CORE_EDGE_DETECTION_0_EVENT,
+           "Event_Broadcast" + std::to_string(TLAST_BCAST_CHANNEL) + " @ " + loc
+           + " = Edge_Detection_Event_0 (" + spec.dmaName + " TLAST)");
 
-  // The lock stall leaves east, the core module's internal link to the memory module, and
-  // nowhere else. The memory backpressure pair arrives the other way and is counted here,
-  // because this module's two combos are free while the memory module's are both spent on
-  // the starvation pair; blocking all four directions does not stop this module observing
-  // those broadcasts, it only stops it re-driving them back into the memory module.
   appendBroadcastBlockConfig(CM_BCAST_BLOCK_BASE,
-                             {{STALL_BCAST_CHANNELS, BCAST_DIR_EAST},
-                              {S2MM_BP_BCAST_CHANNELS, -1}},
+                             {{STALL_BCAST_CHANNELS, BCAST_DIR_EAST}},
                              loc, tileAddress, writes);
-
-  const uint8_t ch0Blocked = CORE_BROADCAST_0_EVENT + S2MM_BP_CH0_BCAST_CHANNEL;
-  const uint8_t ch1Blocked = CORE_BROADCAST_0_EVENT + S2MM_BP_CH1_BCAST_CHANNEL;
-
-  // Combo 0 pairs inputs A and B, combo 1 pairs C and D, so the lock stall is fed in
-  // twice, once against each channel's backpressure. Here the lock stall is the native
-  // core event and the DMA events are the broadcasts, the reverse of the memory module.
-  addWrite(CM_COMBO_EVENT_INPUTS,
-           (static_cast<uint32_t>(LOCK_STALL_EVENT) & 0x7F)
-             | ((static_cast<uint32_t>(ch0Blocked)  & 0x7F) << 8)
-             | ((static_cast<uint32_t>(LOCK_STALL_EVENT) & 0x7F) << 16)
-             | ((static_cast<uint32_t>(ch1Blocked)  & 0x7F) << 24),
-           "Combo_Event_Inputs @ " + loc + " (A,C = lock stall, B = Broadcast"
-           + std::to_string(S2MM_BP_CH0_BCAST_CHANNEL) + " s2mm ch0 memory backpressure, "
-           + "D = Broadcast" + std::to_string(S2MM_BP_CH1_BCAST_CHANNEL)
-           + " s2mm ch1 memory backpressure)");
-
-  addWrite(CM_COMBO_EVENT_CONTROL,
-           COMBO_AND | (COMBO_AND << 8),
-           "Combo_Event_Control @ " + loc + " (combo0 = A AND B, combo1 = C AND D)");
 
   addWrite(CM_PERF_COUNTER0 + 8, 0, "Reset PerfCounter2 @ " + loc);
   addWrite(CM_PERF_COUNTER0 + 12, 0, "Reset PerfCounter3 @ " + loc);
@@ -2332,88 +2346,79 @@ std::vector<CTRegisterWrite> AieDtraceCTWriter::generateLockStarvationCoreConfig
   // Performance_Ctrl1: [6:0]=Cnt2_Start, [14:8]=Cnt2_Stop, [22:16]=Cnt3_Start, [30:24]=Cnt3_Stop.
   // Performance_Control0 is left alone here for the same reason as on the first tile.
   addWrite(CM_PERF_CTRL1,
-           counterEventPair(CORE_COMBO_EVENT_0_EVENT, 0)
-             | counterEventPair(CORE_COMBO_EVENT_1_EVENT, 16),
-           "PerfCtrl1 @ " + loc
-           + " (ctr2 = Combo_Event_0 lock stall & ch0 backpressure, "
-           + "ctr3 = Combo_Event_1 lock stall & ch1 backpressure)");
+           counterEventPair(CORE_PORT_RUNNING_0_EVENT, 0)
+             | (static_cast<uint32_t>(CORE_PORT_RUNNING_0_EVENT & 0x7F) << 16)
+             | (static_cast<uint32_t>(CORE_PORT_TLAST_0_EVENT & 0x7F) << 24),
+           "PerfCtrl1 @ " + loc + " (ctr2 = Port_Running_0, ctr3 = Port_Running_0 to "
+           + "Port_TLAST_0, " + spec.dmaName + ")");
 
   return writes;
 }
 
-std::vector<CTRegisterWrite> AieDtraceCTWriter::generateLockStarvationMemoryConfig(
-    uint8_t column, uint8_t row)
+std::vector<CTRegisterWrite> AieDtraceCTWriter::generateDmaTileMemoryConfig(
+    uint8_t column, uint8_t row, const DmaTileSpec& spec)
 {
   std::vector<CTRegisterWrite> writes;
 
   uint64_t tileAddress = (static_cast<uint64_t>(column) << columnShift) |
                          (static_cast<uint64_t>(row) << rowShift);
 
-  auto addWrite = [&](uint64_t offset, uint32_t value, const std::string& comment) {
+  auto addWrite = [&](uint64_t offset, uint32_t value, const std::string& comment,
+                      uint32_t mask = 0xFFFFFFFF) {
     CTRegisterWrite w;
     w.address = tileAddress + offset;
     w.value = value;
     w.comment = comment;
+    w.mask = mask;
     writes.push_back(w);
   };
 
   std::string loc = "memory (" + std::to_string(column) + "," + std::to_string(row) + ")";
+  const std::string dma = spec.dmaName;
 
-  // The core module counts the same lock stall against each channel's memory
-  // backpressure, and a combo event cannot reach across modules either, so these two
-  // memory module DMA events make the return trip as broadcasts.
-  const uint8_t ch0Blocked = MEM_DMA_S2MM_0_MEMORY_BACKPRESSURE_EVENT;
-  const uint8_t ch1Blocked = MEM_DMA_S2MM_0_MEMORY_BACKPRESSURE_EVENT + 1;
-
-  addWrite(MM_EVENT_BROADCAST0 + 4 * S2MM_BP_CH0_BCAST_CHANNEL, ch0Blocked,
-           "Event_Broadcast" + std::to_string(S2MM_BP_CH0_BCAST_CHANNEL) + " @ " + loc
-           + " = s2mm ch0 memory backpressure");
-  addWrite(MM_EVENT_BROADCAST0 + 4 * S2MM_BP_CH1_BCAST_CHANNEL, ch1Blocked,
-           "Event_Broadcast" + std::to_string(S2MM_BP_CH1_BCAST_CHANNEL) + " @ " + loc
-           + " = s2mm ch1 memory backpressure");
-
-  // West is the memory module's internal link to the core module, so the backpressure
-  // pair leaves that way and is blocked everywhere else; these channels reset unblocked,
-  // so the other three directions have to be closed explicitly. The incoming lock stall
-  // is blocked in all four directions, which stops this module re-driving it without
-  // stopping it counting.
-  appendBroadcastBlockConfig(MM_BCAST_BLOCK_BASE,
-                             {{STALL_BCAST_CHANNELS, -1},
-                              {S2MM_BP_BCAST_CHANNELS, BCAST_DIR_WEST}},
+  // The incoming lock stall and TLAST broadcasts are blocked in all four directions,
+  // which stops this module re-driving them without stopping it counting.
+  appendBroadcastBlockConfig(MM_BCAST_BLOCK_BASE, {{STALL_BCAST_CHANNELS, -1}},
                              loc, tileAddress, writes);
 
   const uint8_t lockEvent  = MEM_BROADCAST_0_EVENT + LOCK_STALL_BCAST_CHANNEL;
-  const uint8_t ch0Starved = MEM_DMA_S2MM_0_STREAM_STARVATION_EVENT;
-  const uint8_t ch1Starved = MEM_DMA_S2MM_0_STREAM_STARVATION_EVENT + 1;
+  const uint8_t tlastEvent = MEM_BROADCAST_0_EVENT + TLAST_BCAST_CHANNEL;
 
   // Combo 0 pairs inputs A and B, combo 1 pairs C and D, so the broadcast lock stall is
-  // fed in twice, once against each channel's starvation.
+  // fed in twice, once against each of the channel's DMA events.
   addWrite(MM_COMBO_EVENT_INPUTS,
-           (static_cast<uint32_t>(lockEvent)  & 0x7F)
-             | ((static_cast<uint32_t>(ch0Starved) & 0x7F) << 8)
-             | ((static_cast<uint32_t>(lockEvent)  & 0x7F) << 16)
-             | ((static_cast<uint32_t>(ch1Starved) & 0x7F) << 24),
+           (static_cast<uint32_t>(lockEvent) & 0x7F)
+             | ((static_cast<uint32_t>(spec.comboEventB) & 0x7F) << 8)
+             | ((static_cast<uint32_t>(lockEvent) & 0x7F) << 16)
+             | ((static_cast<uint32_t>(spec.comboEventD) & 0x7F) << 24),
            "Combo_Event_Inputs @ " + loc + " (A,C = Broadcast"
-           + std::to_string(LOCK_STALL_BCAST_CHANNEL)
-           + " lock stall, B = s2mm ch0 starvation, D = s2mm ch1 starvation)");
+           + std::to_string(LOCK_STALL_BCAST_CHANNEL) + " lock stall, B = " + dma + " "
+           + spec.comboNameB + ", D = " + dma + " " + spec.comboNameD + ")");
 
   // Both combos AND their pair, so each counter accumulates only the cycles where the
-  // core was lock stalled while that channel was starved.
+  // core was lock stalled while that DMA event was asserted.
   addWrite(MM_COMBO_EVENT_CONTROL,
            COMBO_AND | (COMBO_AND << 8),
            "Combo_Event_Control @ " + loc + " (combo0 = A AND B, combo1 = C AND D)");
 
   addWrite(MM_PERF_COUNTER0 + 0, 0, "Reset PerfCounter0 @ " + loc);
   addWrite(MM_PERF_COUNTER0 + 4, 0, "Reset PerfCounter1 @ " + loc);
+  addWrite(MM_PERF_COUNTER0 + 8, 0, "Reset PerfCounter2 @ " + loc);
 
   // Performance_Control0: [6:0]=Cnt0_Start, [14:8]=Cnt0_Stop, [22:16]=Cnt1_Start, [30:24]=Cnt1_Stop.
-  // Counters 2 and 3 are unused here, so Performance_Control2 is left alone.
   addWrite(MM_PERF_CTRL0,
            counterEventPair(MEM_COMBO_EVENT_0_EVENT, 0)
              | counterEventPair(MEM_COMBO_EVENT_1_EVENT, 16),
-           "PerfCtrl0 @ " + loc
-           + " (ctr0 = Combo_Event_0 lock stall & ch0 starvation, "
-           + "ctr1 = Combo_Event_1 lock stall & ch1 starvation)");
+           "PerfCtrl0 @ " + loc + " (ctr0 = Combo_Event_0 lock stall & " + dma + " "
+           + spec.comboNameB + ", ctr1 = Combo_Event_1 lock stall & " + dma + " "
+           + spec.comboNameD + ")");
+
+  // Performance_Control2: [6:0]=Cnt2_Start, [14:8]=Cnt2_Stop. Counter 3 is unused here.
+  addWrite(MM_PERF_CTRL2,
+           counterEventPair(tlastEvent, 0),
+           "PerfCtrl2 @ " + loc + " (ctr2 = Broadcast"
+           + std::to_string(TLAST_BCAST_CHANNEL) + " " + dma + " TLAST)",
+           MM_PERF_CTRL2_CTR2_MASK);
 
   return writes;
 }

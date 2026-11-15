@@ -111,6 +111,25 @@ struct BroadcastChannelGroup {
 };
 
 /**
+ * @brief One compute_io_bound DMA tile: the DMA channel it watches and its counter names
+ *
+ * Each such tile watches one of its own DMA channels through core stream switch monitor
+ * slot 0, and pairs the core's lock stall with two of that channel's memory module DMA
+ * events (combo inputs B and D).
+ */
+struct DmaTileSpec {
+  uint8_t rowOffset;          // Core rows above aie_tile_row_start
+  uint8_t dmaChannel;         // DMA channel number within its direction (S2MM or MM2S)
+  uint8_t portId;             // Core stream switch port id of the DMA channel
+  bool isMaster;              // true for an S2MM (master) port, false for MM2S (slave)
+  uint8_t comboEventB;        // Memory module DMA event ANDed with the lock stall in combo 0
+  uint8_t comboEventD;        // Memory module DMA event ANDed with the lock stall in combo 1
+  const char* dmaName;        // Counter name prefix, e.g. "s2mm0"
+  const char* comboNameB;     // Combo 0 DMA event name, e.g. "stream_starvation"
+  const char* comboNameD;     // Combo 1 DMA event name, e.g. "memory_backpressure"
+};
+
+/**
  * @class AieDtraceCTWriter
  * @brief Generates CT (CERT Tracing) files for VE2 AIE profiling
  *
@@ -506,37 +525,38 @@ private:
       const std::vector<uint8_t>& rows, const std::string& metricSet, uint8_t channel);
 
   /**
-   * @brief Generate the core module config for the compute_io_bound lock correlation tile
+   * @brief Generate the core module config for a compute_io_bound DMA tile
    *
-   * Drives the core's lock stall onto a broadcast channel and confines it to the tile, so
-   * the memory module can combine it with its own DMA starvation events. Counters 2 and 3
-   * then count the other half of the correlation locally: the lock stall ANDed with each
-   * S2MM channel's memory backpressure, arriving from the memory module as broadcasts.
-   * Both use Start == Stop so each accumulates the cycles its combo is asserted. This
-   * module hosts the backpressure pair because the memory module's two combos are both
-   * spent on the starvation pair.
+   * Points stream switch monitor slot 0 at the spec's DMA port. Counter 2 counts the
+   * cycles Port_Running_0 is asserted (Start == Stop), and counter 3 the cycles from
+   * Port_Running_0 to Port_TLAST_0. Edge detector 0 turns Port_TLAST_0 into a one-cycle
+   * rising-edge event, which is broadcast to the memory module together with the lock
+   * stall; both broadcasts are blocked everywhere but east, the internal link to the
+   * memory module. Only Performance_Control1 is written, as on the first tile.
    *
    * @param column Partition-relative core tile column
    * @param row Absolute core tile row
+   * @param spec DMA channel watched by this tile
    * @return Vector of register writes for the begin block
    */
-  std::vector<CTRegisterWrite> generateLockStarvationCoreConfig(uint8_t column, uint8_t row);
+  std::vector<CTRegisterWrite> generateDmaTileCoreConfig(uint8_t column, uint8_t row,
+                                                         const DmaTileSpec& spec);
 
   /**
-   * @brief Generate the memory module config for the compute_io_bound lock correlation tile
+   * @brief Generate the memory module config for a compute_io_bound DMA tile
    *
-   * Counters 0 and 1 count two combo events: the broadcast lock stall ANDed with S2MM
-   * channel 0 starvation, and the same ANDed with S2MM channel 1 starvation. Each counter
-   * uses Start == Stop so it accumulates the cycles its combo is asserted. Counters 2 and
-   * 3 are left unprogrammed. This module also drives each S2MM channel's memory
-   * backpressure onto a broadcast channel for the core module to pair with the same lock
-   * stall.
+   * Counters 0 and 1 count combo 0 (broadcast lock stall AND the spec's event B) and
+   * combo 1 (broadcast lock stall AND event D), and counter 2 counts the broadcast TLAST
+   * edges, each with Start == Stop. Counter 3 is left unprogrammed: Performance_Control2
+   * is written with a mask that covers only counter 2's fields.
    *
    * @param column Partition-relative core tile column
    * @param row Absolute core tile row
+   * @param spec DMA channel watched by this tile
    * @return Vector of register writes for the begin block
    */
-  std::vector<CTRegisterWrite> generateLockStarvationMemoryConfig(uint8_t column, uint8_t row);
+  std::vector<CTRegisterWrite> generateDmaTileMemoryConfig(uint8_t column, uint8_t row,
+                                                           const DmaTileSpec& spec);
 
   /**
    * @brief Generate the core module config for the compute_io_bound tile
@@ -617,6 +637,7 @@ private:
   uint8_t columnShift;
   uint8_t rowShift;
   uint8_t coreRowStart;       // Absolute row of the first AIE core row (aie_tile_row_start)
+  uint8_t coreNumRows;        // Number of AIE core rows (aie_tile_num_rows)
   uint8_t partitionStartCol;  // Absolute start column of the hw_context partition
 
   // Base offsets by module type
@@ -696,19 +717,17 @@ private:
   static constexpr uint8_t  LOCK_STALL_BCAST_CHANNEL    = 13;
   static constexpr uint8_t  MEMORY_STALL_BCAST_CHANNEL  = 12;
 
-  // Broadcast channels carrying the two S2MM memory backpressure events the other way,
-  // from the memory module to the core module. They continue the block above so this
-  // metric owns a contiguous 10-15, clear of the driver's channels and of the fixed 6-9
-  // the aie_trace windowed-trace and core-to-memory networks use.
-  static constexpr uint8_t  S2MM_BP_CH0_BCAST_CHANNEL = 11;
-  static constexpr uint8_t  S2MM_BP_CH1_BCAST_CHANNEL = 10;
-
-  // The two directions are blocked independently, so each carries its own channel mask.
   static constexpr uint32_t STALL_BCAST_CHANNELS =
       (1u << STREAM_STALL_BCAST_CHANNEL) | (1u << CASCADE_STALL_BCAST_CHANNEL)
     | (1u << LOCK_STALL_BCAST_CHANNEL)   | (1u << MEMORY_STALL_BCAST_CHANNEL);
-  static constexpr uint32_t S2MM_BP_BCAST_CHANNELS =
-      (1u << S2MM_BP_CH0_BCAST_CHANNEL) | (1u << S2MM_BP_CH1_BCAST_CHANNEL);
+
+  // On the DMA tiles channel 14 carries the TLAST edge instead of the cascade stall. It
+  // must stay inside STALL_BCAST_CHANNELS so the same block config confines it.
+  static constexpr uint8_t  TLAST_BCAST_CHANNEL = 14;
+  static_assert((STALL_BCAST_CHANNELS >> TLAST_BCAST_CHANNEL) & 1u,
+                "TLAST_BCAST_CHANNEL must be blocked with the stall channels");
+  static_assert((STALL_BCAST_CHANNELS >> LOCK_STALL_BCAST_CHANNEL) & 1u,
+                "LOCK_STALL_BCAST_CHANNEL must be blocked with the stall channels");
 
   // compute_io_bound uses a single tile: core module counters 2 and 3 for total
   // execution cycles and group stall, memory module counters 0-3 for the four
@@ -716,17 +735,40 @@ private:
   // written, so no counter shares a control register with another owner.
   static constexpr uint8_t COMPUTE_IO_CORE_COL = 0;
 
-  // compute_io_bound also programs a second tile, one core row above the first, which
-  // pairs the core's lock stall with each S2MM channel's starvation on its memory module
-  // counters, and with each channel's memory backpressure on its core module counters.
-  // Channel 0 carries the IFM and channel 1 the weights, so the counters say which input
-  // the core was waiting on, and whether that input was late from the stream (starvation)
-  // or arrived but could not be written into local memory (backpressure).
-  static constexpr uint8_t LOCK_STARVATION_ROW_OFFSET = 1;
+  // compute_io_bound also programs one tile per watched DMA channel in the core rows
+  // above the first (S2MM 0, S2MM 1 and MM2S 0 at row offsets 1, 2 and 3). Each pairs its
+  // core's lock stall with two of that channel's DMA events, and measures the channel's
+  // Port_Running and Running-to-TLAST cycles and its TLAST count.
 
   // aie2ps memory module DMA events (xaie_events_aie2ps.h), channel N at base + N.
   static constexpr uint8_t MEM_DMA_S2MM_0_STREAM_STARVATION_EVENT   = 35;
+  static constexpr uint8_t MEM_DMA_S2MM_1_STREAM_STARVATION_EVENT   = 36;
+  static constexpr uint8_t MEM_DMA_MM2S_0_STREAM_BACKPRESSURE_EVENT = 37;
   static constexpr uint8_t MEM_DMA_S2MM_0_MEMORY_BACKPRESSURE_EVENT = 39;
+  static constexpr uint8_t MEM_DMA_S2MM_1_MEMORY_BACKPRESSURE_EVENT = 40;
+  static constexpr uint8_t MEM_DMA_MM2S_0_MEMORY_STARVATION_EVENT   = 41;
+
+  // aie2ps core stream switch ports: DMA S2MM N is master port 1 + N, DMA MM2S N is
+  // slave port 1 + N. Event_Port_Selection slot 0 is [4:0] port id, bit 5 master.
+  static constexpr uint8_t  CORE_DMA_S2MM_0_PORT = 1;
+  static constexpr uint8_t  CORE_DMA_S2MM_1_PORT = 2;
+  static constexpr uint8_t  CORE_DMA_MM2S_0_PORT = 1;
+  static constexpr uint32_t PORT_SEL_SLOT0_MASK  = 0x0000003F;
+  static constexpr uint32_t PORT_SEL_MASTER_BIT  = 0x00000020;
+
+  // aie2ps core module events for monitor slot 0 and edge detector 0.
+  static constexpr uint8_t  CORE_PORT_RUNNING_0_EVENT   = 75;
+  static constexpr uint8_t  CORE_PORT_TLAST_0_EVENT     = 77;
+  static constexpr uint8_t  CORE_EDGE_DETECTION_0_EVENT = 13;
+
+  // Edge_Detection_event_control: [6:0] event 0 source, bit 9 rising, bit 10 falling.
+  // The mask leaves edge detector 1 ([22:16], bits 25-26) untouched.
+  static constexpr uint64_t CM_EDGE_DETECTION_CTRL  = 0x00034408;
+  static constexpr uint32_t EDGE_DET0_MASK          = 0x0000067F;
+  static constexpr uint32_t EDGE_DET0_RISING        = 0x00000200;
+
+  // Performance_Control2 fields for memory module counter 2 only.
+  static constexpr uint32_t MM_PERF_CTRL2_CTR2_MASK = 0x00007F7F;
 
   // Combo_Event_Inputs packs four 7-bit event ids: A at 0, B at 8, C at 16, D at 24.
   // Combo_Event_Control holds one 2-bit op per combo, 8 bits apart, and 0 selects AND
@@ -739,8 +781,6 @@ private:
   static constexpr uint32_t COMBO_AND = 0;
   static constexpr uint8_t  MEM_COMBO_EVENT_0_EVENT  = 7;
   static constexpr uint8_t  MEM_COMBO_EVENT_1_EVENT  = 8;
-  static constexpr uint8_t  CORE_COMBO_EVENT_0_EVENT = 9;
-  static constexpr uint8_t  CORE_COMBO_EVENT_1_EVENT = 10;
 
   // Mem tile (L2) offsets (aie2ps). The bundled aie-codegen register database reports
   // MaxCounterVal = 4 for the mem tile module, which is stale against the spec: there
